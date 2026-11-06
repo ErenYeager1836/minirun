@@ -1,0 +1,13 @@
+[package]
+name = "minirun"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+nix = { version = "0.29", features = ["sched", "mount", "fs", "signal", "process", "user", "hostname"] }
+libc = "0.2"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
