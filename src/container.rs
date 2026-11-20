@@ -275,10 +275,8 @@ impl ContainerRuntime {
                 }
 
                 info!("Executing as PID 1: {} {:?}", self.args.command, self.args.args);
-                nix::unistd::execvp(&c_command, &c_args)
-                    .with_context(|| format!("Failed to exec command: '{}'", self.args.command))?;
-
-                Ok(())
+                let err = nix::unistd::execvp(&c_command, &c_args).unwrap_err();
+                Err(err).with_context(|| format!("Failed to exec command: '{}'", self.args.command))
             }
         }
     }
