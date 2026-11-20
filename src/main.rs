@@ -1,12 +1,7 @@
-mod cgroups;
-mod cli;
-mod container;
-mod doctor;
-pub mod guard;
-mod rootfs;
-
 use clap::Parser;
-use cli::{Cli, Commands};
+use minirun::cli::{Cli, Commands};
+use minirun::container::ContainerRuntime;
+use minirun::doctor;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
@@ -24,7 +19,7 @@ fn main() -> anyhow::Result<()> {
             doctor::run_doctor()?;
         }
         Commands::Run(args) => {
-            let runtime = container::ContainerRuntime::new(args);
+            let runtime = ContainerRuntime::new(args);
             let exit_code = runtime.run()?;
             std::process::exit(exit_code);
         }

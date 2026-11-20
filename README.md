@@ -162,6 +162,20 @@ All `pid`, `tgid`, and `ppid` values reported in Guard alerts represent **host-n
 {"timestamp":"2026-11-19T21:46:00Z","container_id":"minirun-1042","pid":2841,"tgid":2841,"ppid":2800,"comm":"python3","severity":"CRITICAL","event_type":"REVERSE_SHELL","details":"reverse shell sequence: connect 10.0.0.1:4444 -> dup2 -> /bin/sh","enforced":true}
 ```
 
+### Performance & Host Syscall Overhead
+
+Rather than claiming zero overhead, `minirun Guard` explicitly measures and bounds the CPU cost of its eBPF tracepoints on host processes. When Guard is attached, non-container processes evaluate `bpf_get_current_cgroup_id()` and perform a single hash map lookup before returning early.
+
+Benchmarked on **11th Gen Intel Core i5-1135G7 @ 2.40GHz (Linux 7.2.11)** over 7 rounds of 200,000 `openat("/dev/null") + close()` iterations (1.4M operations per condition):
+
+| Condition | Median Latency | Overhead vs Baseline |
+| :--- | :--- | :--- |
+| **1. Guard Unloaded (Baseline)** | **2,268.96 ns** | Baseline (0.00 ns) |
+| **2. Guard Loaded (No Container)** | **2,743.05 ns** | **+474.08 ns (+20.89%)** |
+| **3. Guard Loaded (Busy Container)** | **3,301.53 ns** | **+1,032.56 ns (+45.51%)** |
+
+On non-container host processes, the early-exit check imposes **~474 ns** per `openat` syscall. For complete methodology and reproduction commands, see [BENCHMARKS.md](file:///home/erenyeager/Projects/minirun/BENCHMARKS.md).
+
 ### Threat Model & Limitations
 
 * **Root Privileges Required:** Guard requires `CAP_BPF`, `CAP_PERFMON`, and `CAP_SYS_RESOURCE` (or root) to load eBPF programs, attach to tracepoints, and configure cgroup controllers.
