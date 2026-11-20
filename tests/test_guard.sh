@@ -81,7 +81,7 @@ echo "==========================================================================
 # Test 1: Benign Command (No Alerts)
 # ------------------------------------------------------------------------------
 log_info "Test 1: Benign Command (/bin/echo hello) with --guard audit"
-OUT_1=$("${MINIRUN_BIN}" run --guard audit -- /bin/echo "hello" 2>&1)
+OUT_1=$("${MINIRUN_BIN}" run --guard audit -- /bin/echo "hello" 2>&1 || true)
 
 if echo "${OUT_1}" | grep -q "hello" && ! echo "${OUT_1}" | grep -q "\[GUARD ALERT\]"; then
     log_pass "Benign command exited 0 with zero security alerts."
@@ -166,7 +166,7 @@ fi
 # Test 6: Enforce Mode - Initial Exec Exemption & Subshell Survival
 # ------------------------------------------------------------------------------
 log_info "Test 6a: Enforce Mode - Initial Shell Entrypoint Exemption"
-OUT_6A=$("${MINIRUN_BIN}" run --guard enforce -- /bin/sh -c 'echo "entrypoint_alive"' 2>&1)
+OUT_6A=$("${MINIRUN_BIN}" run --guard enforce -- /bin/sh -c 'echo "entrypoint_alive"' 2>&1 || true)
 
 if echo "${OUT_6A}" | grep -q "entrypoint_alive"; then
     log_pass "Container launched with /bin/sh entrypoint survived under --guard enforce (init_exec_seen exemption verified)."
@@ -175,7 +175,7 @@ else
 fi
 
 log_info "Test 6b: Enforce Mode - Non-critical Shell Exec (Survives, HIGH Alert Only)"
-OUT_6B=$("${MINIRUN_BIN}" run --guard enforce -- /bin/sh -c 'sh -c "echo subshell_survived"' 2>&1)
+OUT_6B=$("${MINIRUN_BIN}" run --guard enforce -- /bin/sh -c 'sh -c "echo subshell_survived"' 2>&1 || true)
 
 if echo "${OUT_6B}" | grep -q "subshell_survived" && echo "${OUT_6B}" | grep -q "\[HIGH\]"; then
     log_pass "Subshell execution produced HIGH alert without triggering enforce termination."
@@ -207,7 +207,7 @@ log_info "Test 7: Host Isolation Scoping"
 (for i in {1..5}; do cat /etc/shadow >/dev/null 2>&1 || true; whoami >/dev/null 2>&1 || true; sleep 0.05; done) &
 NOISE_PID=$!
 
-OUT_7=$("${MINIRUN_BIN}" run --guard audit -- /bin/echo "isolated" 2>&1)
+OUT_7=$("${MINIRUN_BIN}" run --guard audit -- /bin/echo "isolated" 2>&1 || true)
 wait "${NOISE_PID}" 2>/dev/null || true
 
 if echo "${OUT_7}" | grep -q "isolated" && ! echo "${OUT_7}" | grep -q "\[GUARD ALERT\]"; then

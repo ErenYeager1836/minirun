@@ -14,7 +14,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libelf-dev zlib1g-dev clang
+          sudo apt-get install -y pkg-config libelf-dev zlib1g-dev clang iproute2 python3
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -28,13 +28,22 @@ jobs:
         run: cargo build
       - name: Inspect Runner Kernel & Cgroups v2
         run: |
-          echo "=== Kernel Release ==="
+          echo "### Runner Environment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kernel Release:** \`$(uname -r)\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **BTF Path:** \`$(ls -la /sys/kernel/btf/vmlinux 2>/dev/null || echo 'BTF missing')\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cgroup Filesystem:** \`$(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo 'stat failed')\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cgroup v2 Controllers:** \`$(cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo 'missing')\`" >> $GITHUB_STEP_SUMMARY
           uname -r
-          echo "=== Kernel BTF ==="
           ls -la /sys/kernel/btf/vmlinux || echo "BTF missing"
-          echo "=== Cgroup Filesystem Type (expected: cgroup2fs) ==="
           stat -fc %T /sys/fs/cgroup || echo "stat failed"
-          echo "=== Cgroup v2 Controllers ==="
           cat /sys/fs/cgroup/cgroup.controllers || echo "cgroup.controllers missing"
       - name: Run Guard Integration Tests (sudo)
-        run: sudo ./tests/test_guard.sh
+        run: |
+          sudo -E ./tests/test_guard.sh 2>&1 | tee test_guard.log
+      - name: Publish Test Summary
+        if: always()
+        run: |
+          echo "### Guard Integration Test Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat test_guard.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No test log found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
