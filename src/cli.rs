@@ -1,6 +1,8 @@
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::guard::GuardMode;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "minirun",
@@ -49,6 +51,14 @@ pub struct RunArgs {
     /// Run in rootless mode using User Namespaces (CLONE_NEWUSER)
     #[arg(long)]
     pub rootless: bool,
+
+    /// Enable eBPF runtime security Guard [audit|enforce|none]
+    #[arg(long, default_value = "none")]
+    pub guard: GuardMode,
+
+    /// Format Guard security alerts as JSON lines
+    #[arg(long)]
+    pub guard_json: bool,
 
     /// Command to execute inside the container
     #[arg(required = true)]

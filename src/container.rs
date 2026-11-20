@@ -5,10 +5,12 @@ use nix::unistd::{fork, pipe, read, sethostname, write, ForkResult, Pid};
 use std::ffi::CString;
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use tracing::{debug, error, info, warn};
 
 use crate::cgroups::CgroupV2Manager;
 use crate::cli::RunArgs;
+use crate::guard::{Guard, GuardMode};
 use crate::rootfs::setup_rootfs;
 
 pub struct ContainerRuntime {
@@ -28,14 +30,18 @@ impl ContainerRuntime {
     pub fn run(&self) -> Result<i32> {
         info!("Initializing container {}", self.container_id);
 
-        // Setup Cgroups v2 manager if resource limits are requested
-        let cgroup_mgr = if self.args.memory.is_some()
+        // 1. Create cgroup v2 directory first
+        let cgroup_mgr = if self.args.guard != GuardMode::None
+            || self.args.memory.is_some()
             || self.args.cpus.is_some()
             || self.args.pids.is_some()
         {
             match CgroupV2Manager::new(&self.container_id) {
                 Ok(mgr) => Some(mgr),
                 Err(e) => {
+                    if self.args.guard != GuardMode::None {
+                        anyhow::bail!("Guard requires cgroups v2 manager: {}", e);
+                    }
                     warn!("Cgroup initialization warning: {}. Continuing without cgroup limits.", e);
                     None
                 }
@@ -44,14 +50,46 @@ impl ContainerRuntime {
             None
         };
 
-        // Two-way synchronization pipes:
-        // pipe_c2p: child -> parent (child signals it created userns)
-        // pipe_p2c: parent -> child (parent signals cgroups & userns maps are ready)
-        let (c2p_read_fd, c2p_write_fd) = pipe().context("Failed to create child-to-parent pipe")?;
-        let (p2c_read_fd, p2c_write_fd) = pipe().context("Failed to create parent-to-child pipe")?;
+        // 2. Initialize Guard and register cgroup ID in BPF map BEFORE spawning child
+        let mut guard = if self.args.guard != GuardMode::None {
+            Some(Guard::new(self.args.guard, self.args.guard_json)?)
+        } else {
+            None
+        };
 
-        match unsafe { fork() }.context("Fork failed")? {
-            ForkResult::Child => {
+        let mut registered_cgid = None;
+        if let (Some(g), Some(mgr)) = (guard.as_mut(), cgroup_mgr.as_ref()) {
+            match g.register_container(mgr.cgroup_path(), &self.container_id) {
+                Ok(cgid) => registered_cgid = Some(cgid),
+                Err(e) => {
+                    g.shutdown();
+                    return Err(e).context("Failed to register container cgroup in Guard");
+                }
+            }
+        }
+
+        // 3. Two-way synchronization pipes:
+        // pipe_c2p: child -> parent (child signals it created userns)
+        // pipe_p2c: parent -> child (parent signals cgroups & Guard BPF maps are ready)
+        let (c2p_read_fd, c2p_write_fd) = match pipe() {
+            Ok(fds) => fds,
+            Err(e) => {
+                Self::cleanup_guard(&mut guard, registered_cgid);
+                return Err(e).context("Failed to create child-to-parent pipe");
+            }
+        };
+
+        let (p2c_read_fd, p2c_write_fd) = match pipe() {
+            Ok(fds) => fds,
+            Err(e) => {
+                Self::cleanup_guard(&mut guard, registered_cgid);
+                return Err(e).context("Failed to create parent-to-child pipe");
+            }
+        };
+
+        // 4. Fork container process
+        let child = match unsafe { fork() } {
+            Ok(ForkResult::Child) => {
                 drop(c2p_read_fd);
                 drop(p2c_write_fd);
 
@@ -67,7 +105,7 @@ impl ContainerRuntime {
                 }
                 drop(c2p_write_fd);
 
-                // Wait for parent signal that maps and cgroups are ready
+                // Wait for parent signal that cgroup.procs and maps are ready
                 let mut buf = [0u8; 1];
                 let _ = read(p2c_read_fd.as_raw_fd(), &mut buf);
                 drop(p2c_read_fd);
@@ -79,49 +117,96 @@ impl ContainerRuntime {
                 }
                 std::process::exit(0);
             }
-            ForkResult::Parent { child } => {
-                drop(c2p_write_fd);
-                drop(p2c_read_fd);
-                info!("Container process spawned with host PID {}", child);
-
-                // If rootless, wait for child to unshare userns, then write uid_map/gid_map from parent
-                if self.args.rootless {
-                    let mut buf = [0u8; 1];
-                    let _ = read(c2p_read_fd.as_raw_fd(), &mut buf);
-                    drop(c2p_read_fd);
-
-                    if let Err(e) = setup_user_namespace_mappings(child) {
-                        warn!("User namespace UID/GID mapping error: {}", e);
-                    } else {
-                        info!("Configured rootless user namespace (mapped container root -> host user)");
-                    }
-                } else {
-                    drop(c2p_read_fd);
-                }
-
-                // Configure cgroups before releasing child
-                if let Some(ref mgr) = cgroup_mgr {
-                    if let Err(e) = mgr.add_process(child.as_raw()) {
-                        warn!("Failed to attach PID to cgroup: {}", e);
-                    }
-                    if let Some(ref mem) = self.args.memory {
-                        let _ = mgr.apply_memory_limit(mem);
-                    }
-                    if let Some(cpus) = self.args.cpus {
-                        let _ = mgr.apply_cpu_limit(cpus);
-                    }
-                    if let Some(pids) = self.args.pids {
-                        let _ = mgr.apply_pids_limit(pids);
-                    }
-                }
-
-                // Signal child to proceed
-                write(&p2c_write_fd, &[1u8]).ok();
-                drop(p2c_write_fd);
-
-                // Wait for container process to exit
-                self.wait_for_child(child)
+            Ok(ForkResult::Parent { child }) => child,
+            Err(e) => {
+                // Fork failed; clean up Guard registration and worker thread
+                Self::cleanup_guard(&mut guard, registered_cgid);
+                return Err(e).context("Fork failed");
             }
+        };
+
+        // Parent execution path
+        drop(c2p_write_fd);
+        drop(p2c_read_fd);
+        info!("Container process spawned with host PID {}", child);
+
+        // If rootless, wait for child to unshare userns, then write uid_map/gid_map from parent
+        if self.args.rootless {
+            let mut buf = [0u8; 1];
+            let _ = read(c2p_read_fd.as_raw_fd(), &mut buf);
+            drop(c2p_read_fd);
+
+            if let Err(e) = setup_user_namespace_mappings(child) {
+                warn!("User namespace UID/GID mapping error: {}", e);
+            } else {
+                info!("Configured rootless user namespace (mapped container root -> host user)");
+            }
+        } else {
+            drop(c2p_read_fd);
+        }
+
+        // Add child to cgroup.procs and apply limits BEFORE unblocking child
+        if let Some(ref mgr) = cgroup_mgr {
+            if let Err(e) = mgr.add_process(child.as_raw()) {
+                if self.args.guard != GuardMode::None {
+                    // Security violation: Guard cannot monitor an unattached container.
+                    // Kill child, clean up Guard, and fail closed.
+                    let _ = nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL);
+                    let _ = self.wait_for_child(child);
+                    Self::cleanup_guard(&mut guard, registered_cgid);
+                    anyhow::bail!("Guard security violation: failed to attach container PID {} to cgroup: {}. Terminated child (fail closed).", child, e);
+                }
+                warn!("Failed to attach PID to cgroup: {}", e);
+            }
+            if let Some(ref mem) = self.args.memory {
+                let _ = mgr.apply_memory_limit(mem);
+            }
+            if let Some(cpus) = self.args.cpus {
+                let _ = mgr.apply_cpu_limit(cpus);
+            }
+            if let Some(pids) = self.args.pids {
+                let _ = mgr.apply_pids_limit(pids);
+            }
+        }
+
+        // Release the synchronization pipe (cgroup and Guard registration are confirmed)
+        write(&p2c_write_fd, &[1u8]).ok();
+        drop(p2c_write_fd);
+
+        // Wait for container process to exit
+        let wait_result = self.wait_for_child(child);
+
+        // Drain the ring buffer and stop the worker BEFORE checking killed_by_guard and unregistering.
+        // This guarantees short-lived events (e.g. cat /etc/shadow) and in-kernel kills are fully processed.
+        if let Some(ref mut g) = guard {
+            g.shutdown();
+        }
+
+        // Check if container was terminated by Guard in enforce mode or in-kernel kill
+        let final_exit_code = if let Some(ref g) = guard {
+            if g.killed_by_guard.load(Ordering::SeqCst) {
+                warn!("Container was terminated by Guard enforce policy");
+                137 // 128 + 9 (SIGKILL)
+            } else {
+                wait_result.as_ref().copied().unwrap_or(1)
+            }
+        } else {
+            wait_result.as_ref().copied().unwrap_or(1)
+        };
+
+        // Unregister container cgroup from BPF map
+        if let (Some(g), Some(cgid)) = (guard.as_mut(), registered_cgid) {
+            let _ = g.unregister_container(cgid);
+        }
+
+        let _ = wait_result?;
+        Ok(final_exit_code)
+    }
+
+    fn cleanup_guard(guard: &mut Option<Guard>, registered_cgid: Option<u64>) {
+        if let (Some(g), Some(cgid)) = (guard.as_mut(), registered_cgid) {
+            g.shutdown();
+            let _ = g.unregister_container(cgid);
         }
     }
 
@@ -135,6 +220,9 @@ impl ContainerRuntime {
 
         debug!("Child unsharing container namespaces: {:?}", flags);
         unshare(flags).context("Failed to unshare container namespaces")?;
+
+        // Bring up loopback interface in new network namespace
+        configure_loopback();
 
         // 1. Fork so the grandchild process becomes PID 1 in the new PID namespace
         match unsafe { fork() }.context("Sub-fork for PID 1 failed")? {
@@ -235,4 +323,23 @@ fn setup_user_namespace_mappings(pid: Pid) -> Result<()> {
 
     debug!("Mapped container UID/GID 0 to host UID/GID {}/{}", uid, gid);
     Ok(())
+}
+
+/// Brings up the loopback interface (`lo`) in the container network namespace
+fn configure_loopback() {
+    unsafe {
+        let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+        if sock >= 0 {
+            let mut ifr: libc::ifreq = std::mem::zeroed();
+            let ifname = b"lo\0";
+            std::ptr::copy_nonoverlapping(
+                ifname.as_ptr() as *const libc::c_char,
+                ifr.ifr_name.as_mut_ptr(),
+                ifname.len(),
+            );
+            ifr.ifr_ifru.ifru_flags = (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
+            let _ = libc::ioctl(sock, libc::SIOCSIFFLAGS, &ifr);
+            libc::close(sock);
+        }
+    }
 }

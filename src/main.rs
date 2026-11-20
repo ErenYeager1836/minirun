@@ -2,6 +2,7 @@ mod cgroups;
 mod cli;
 mod container;
 mod doctor;
+pub mod guard;
 mod rootfs;
 
 use clap::Parser;

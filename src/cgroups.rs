@@ -36,6 +36,11 @@ impl CgroupV2Manager {
         Ok(Self { cgroup_path })
     }
 
+    /// Returns a reference to the cgroup directory path
+    pub fn cgroup_path(&self) -> &Path {
+        &self.cgroup_path
+    }
+
     /// Add a process PID to this cgroup
     pub fn add_process(&self, pid: i32) -> Result<()> {
         let procs_file = self.cgroup_path.join("cgroup.procs");
