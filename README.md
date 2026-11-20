@@ -101,7 +101,7 @@ sudo target/debug/minirun run --guard audit --guard-json /bin/sh
 
 ## eBPF Runtime Guard
 
-`minirun Guard` is an in-kernel eBPF security telemetry and active defense engine. Standard container runtimes (like `runc`) isolate processes via namespaces and constrain resources via cgroups, but remain blind to malicious activity once execution begins. `Guard` bridges this gap with zero overhead for the rest of the host.
+`minirun Guard` is an in-kernel eBPF security telemetry and active defense engine. Standard container runtimes (like `runc`) isolate processes via namespaces and constrain resources via cgroups, but remain blind to malicious activity once execution begins. `Guard` bridges this gap with negligible overhead on non-container processes (restricted to `bpf_get_current_cgroup_id()` plus a single hash map lookup before early return).
 
 ### Architecture
 

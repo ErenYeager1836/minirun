@@ -24,3 +24,17 @@ jobs:
         run: cargo test --verbose
       - name: Cargo Clippy
         run: cargo clippy -- -D warnings
+      - name: Build Binary
+        run: cargo build
+      - name: Inspect Runner Kernel & Cgroups v2
+        run: |
+          echo "=== Kernel Release ==="
+          uname -r
+          echo "=== Kernel BTF ==="
+          ls -la /sys/kernel/btf/vmlinux || echo "BTF missing"
+          echo "=== Cgroup Filesystem Type (expected: cgroup2fs) ==="
+          stat -fc %T /sys/fs/cgroup || echo "stat failed"
+          echo "=== Cgroup v2 Controllers ==="
+          cat /sys/fs/cgroup/cgroup.controllers || echo "cgroup.controllers missing"
+      - name: Run Guard Integration Tests (sudo)
+        run: sudo ./tests/test_guard.sh

@@ -260,7 +260,7 @@ int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx) {
     __u64 cgid = bpf_get_current_cgroup_id();
     struct cgroup_config *cfg = bpf_map_lookup_elem(&container_cgroups, &cgid);
     if (!cfg) {
-        return 0; /* Zero overhead on host processes */
+        return 0; /* Negligible overhead: early exit for non-container host processes */
     }
 
     struct guard_event *e = reserve_event();
