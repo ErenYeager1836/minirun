@@ -28,7 +28,7 @@ SOFTWARE.
    Licensed under the MIT License above.
 
 2. **In-Kernel eBPF Telemetry & Probes (`bpf/`):**
-   Dual-licensed under the MIT License and the GNU General Public License v2.0 (GPL-2.0), as declared via `SEC("license") = "Dual MIT/GPL"` in `bpf/minirun_guard.bpf.c`, satisfying Linux kernel eBPF verifier requirements for tracepoint program attachment and `bpf_probe_read_*` family helpers.
+   Dual-licensed under the MIT License and the GNU General Public License v2.0 (GPL-2.0), as declared via `SEC("license") = "Dual MIT/GPL"` in `bpf/minirun_guard.bpf.c`, satisfying Linux kernel eBPF verifier requirements for GPL-restricted helpers such as the `bpf_probe_read_*` family.
 
 3. **Kernel BTF Header Bindings (`bpf/vmlinux.h`):**
    Derived from the Linux kernel BTF type information generated via `bpftool btf dump file /sys/kernel/btf/vmlinux format c` and governed by the Linux kernel's licensing terms (GPL-2.0 with Linux-syscall-note).
