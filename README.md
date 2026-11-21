@@ -23,6 +23,12 @@ An OCI-style lightweight Linux container runtime written from scratch in **Rust*
   - Bind mounts rootfs onto itself.
   - Uses `pivot_root` to swap host root with container rootfs, detaching the old root via `MNT_DETACH`.
   - Mounts isolated virtual pseudo-filesystems (`/proc`, read-only `/sys`).
+- **Seccomp-BPF Syscall Filtering**:
+  - Granular in-kernel syscall restriction via pure Rust `seccompiler` (`--seccomp [default|strict|audit|none]`).
+  - Default profile denylists dangerous syscalls (`ptrace`, `unshare`, `setns`, `bpf`, `mount`, new mount API, etc.).
+  - Argument inspection on `clone` to block unauthorized namespace creation while permitting threading and subshells.
+  - Transparent `clone3` fallback (`ENOSYS`) for glibc/musl compatibility.
+  - Conditional `PR_SET_NO_NEW_PRIVS` flag (`--no-new-privs`).
 - **Runtime Diagnostics (`minirun doctor`)**:
   - Inspects kernel version, cgroups v2 controllers, user namespace support, and seccomp capability.
 
@@ -97,6 +103,19 @@ sudo target/debug/minirun run --guard enforce /bin/sh
 sudo target/debug/minirun run --guard audit --guard-json /bin/sh
 ```
 
+### 5. Run with Seccomp-BPF Syscall Sandboxing
+Apply in-kernel seccomp filters to restrict the container's attack surface against the host kernel:
+```bash
+# Default mode: Blocks dangerous syscalls with EPERM
+sudo target/release/minirun run --seccomp default /bin/sh
+
+# Audit mode: Logs attempted violations to kernel audit log (dmesg / journalctl) without blocking
+sudo target/release/minirun run --seccomp audit /bin/sh
+
+# Restrict privilege escalation via PR_SET_NO_NEW_PRIVS in root containers
+sudo target/release/minirun run --seccomp default --no-new-privs /bin/sh
+```
+
 ---
 
 ## eBPF Runtime Guard
@@ -164,17 +183,20 @@ All `pid`, `tgid`, and `ppid` values reported in Guard alerts represent **host-n
 
 ### Performance & Host Syscall Overhead
 
-Rather than claiming zero overhead, `minirun Guard` explicitly measures and bounds the CPU cost of its eBPF tracepoints on host processes. When Guard is attached, non-container processes evaluate `bpf_get_current_cgroup_id()` and perform a single hash map lookup before returning early.
+Rather than claiming zero overhead, `minirun Guard` explicitly measures and bounds the CPU cost of its eBPF tracepoints on host processes. Activating tracepoints adds a general per-syscall tax across all host threads, plus a probe-specific execution cost on hooked syscalls.
 
-Benchmarked on **11th Gen Intel Core i5-1135G7 @ 2.40GHz (Linux 7.2.11)** over 7 rounds of 200,000 `openat("/dev/null") + close()` iterations (1.4M operations per condition):
+Benchmarked on **11th Gen Intel Core i5-1135G7 @ 2.40GHz (Linux 7.2.11)** over 7 rounds of 200,000 iterations (1.4M operations per condition):
 
-| Condition | Median Latency | Overhead vs Baseline |
-| :--- | :--- | :--- |
-| **1. Guard Unloaded (Baseline)** | **2,268.96 ns** | Baseline (0.00 ns) |
-| **2. Guard Loaded (No Container)** | **2,743.05 ns** | **+474.08 ns (+20.89%)** |
-| **3. Guard Loaded (Busy Container)** | **3,301.53 ns** | **+1,032.56 ns (+45.51%)** |
+| Syscall Operation | Guard Unloaded (Baseline) | Guard Loaded (Idle Host) | Overhead (Tax) | Guard Loaded (Busy Container) |
+| :--- | :--- | :--- | :--- | :--- |
+| **openat + close** (hooked) | **2,097.10 ns** | **2,283.17 ns** | **+186.07 ns (+8.87%)** | **2,631.96 ns (+25.50%)** |
+| **getppid** (unhooked) | **242.33 ns** | **266.68 ns** | **+24.34 ns (+10.04%)** | — |
 
-On non-container host processes, the early-exit check imposes **~474 ns** per `openat` syscall. For complete methodology and reproduction commands, see [BENCHMARKS.md](file:///home/erenyeager/Projects/minirun/BENCHMARKS.md).
+- **General Syscall Tax (~24 ns):** Unhooked `getppid()` reflects the global kernel tracepoint activation tax across all processes.
+- **Probe-Specific Cost (~162 ns):** Hooked `openat` incurs an additional ~162 ns for `bpf_get_current_cgroup_id()`, hash map lookup, and early return.
+- **Container Load Delta (+534.85 ns - likely scheduling/CPU contention, not isolated):** Under active container load (Condition 3), latency increases to 2,631.96 ns. This delta is likely scheduling and CPU contention (cache evictions, turbo frequency adjustments, and runqueue pressure) rather than isolated BPF overhead. All benchmark metrics were measured on a single laptop CPU (11th Gen Intel i5-1135G7).
+
+For complete methodology and reproduction commands, see [BENCHMARKS.md](file:///home/erenyeager/Projects/minirun/BENCHMARKS.md).
 
 ### Threat Model & Limitations
 
@@ -186,6 +208,57 @@ On non-container host processes, the early-exit check imposes **~474 ns** per `o
 * **Abstract Unix Sockets:** Abstract AF_UNIX sockets (with a leading NUL byte) read as empty strings and are not matched by path filters.
 * **PID Reuse within TTL:** Process correlation state persists for up to 30 seconds (`TTL`). In high-churn environments with low host `pid_max`, a recycled PID could theoretically inherit a prior process's `has_connected` state. On systems with standard 32-bit or high `pid_max` (typically 4,194,304), this race is negligible.
 * **Ring Buffer Saturation & Fail-Closed Defense:** If an attacker attempts to blind Guard by flooding events, failed reservations increment a per-CPU `drops` counter. When userspace detects a non-zero drop delta, it emits a `CRITICAL` alert (`Guard blind: N events dropped`). In enforce mode, Guard treats telemetry blindness as a security breach and fails closed by terminating the container via `cgroup.kill`. Additionally, in-kernel SIGKILL boundaries (`docker.sock` and `core_pattern`) evaluate and dispatch signals before `reserve_event()`, preventing flood-based evasion.
+
+---
+
+## Seccomp-BPF Syscall Filtering
+
+`minirun` integrates kernel-level system call sandboxing via pure Rust BPF filter compilation (`seccompiler v0.5.0`). While eBPF Guard provides real-time detection and reactive termination, Seccomp-BPF enforces a preemptive kernel boundary directly at syscall entrypoints before any kernel state modifications take place.
+
+### Isolation Modes (`--seccomp <mode>`)
+
+1. **`default` (Recommended):**
+   - Installs a strict denylist of hazardous kernel syscalls, returning `EPERM` (errno 1) on violation.
+   - Enforces argument inspection on `clone` to prevent nested namespace creation.
+   - Transparently handles modern thread creation via `clone3` fallback.
+2. **`audit`:**
+   - Observability mode that never blocks execution.
+   - Sets the filter action to `SECCOMP_RET_LOG`, recording attempted violations in the host kernel audit log (`dmesg` / `journalctl -k`).
+   - Omits the `clone3` filter to guarantee genuine observe-only behavior without altering application control flow.
+3. **`strict`:**
+   - Reserved for zero-trust application allowlisting.
+   - Because generic container workloads require hundreds of baseline syscalls, `strict` mode currently fails closed with a descriptive `"not yet implemented"` error rather than shipping an insecure partial allowlist.
+4. **`none`:**
+   - Disables seccomp filtering entirely (default if flag is omitted).
+
+### Default Denylist Coverage
+
+| Category | Blocked Syscalls | Attack Mitigated |
+| :--- | :--- | :--- |
+| **Namespace Creation & Joining** | `unshare`, `setns` | Prevents unprivileged or root container processes from pivoting namespaces or joining host namespaces. |
+| **Kernel Modification & Inspection** | `ptrace`, `kexec_load`, `kexec_file_load`, `reboot`, `init_module`, `finit_module`, `delete_module`, `bpf`, `keyctl`, `perf_event_open` | Blocks kernel module injection, BPF loading, host rebooting, cross-process tracing, and kernel key extraction. |
+| **Legacy Filesystem Manipulation** | `mount`, `umount2`, `open_by_handle_at` | Blocks mounting arbitrary filesystems and prevents filesystem handle escapes (`open_by_handle_at`). |
+| **New Linux Mount API** | `fsopen`, `fsmount`, `open_tree`, `fsconfig`, `fspick`, `move_mount`, `mount_setattr` | Prevents modern VFS mount table manipulation and unprivileged filesystem reconfiguration. |
+
+### Argument Inspection: `clone` vs `clone3`
+
+Container workloads (such as Python multi-threading, Go runtimes, or bash subshells) rely on `clone` for legitimate thread and process creation:
+- **`clone` Filter:** Uses bitwise mask equality (`MaskedEq`) on `arg0` (`flags`) to deny invocations containing `CLONE_NEWNS`, `CLONE_NEWCGROUP`, `CLONE_NEWUTS`, `CLONE_NEWIPC`, `CLONE_NEWUSER`, `CLONE_NEWPID`, `CLONE_NEWNET`, or `CLONE_NEWTIME`. Invocations without namespace creation flags (such as `clone(SIGCHLD)` or `pthread_create`) are permitted.
+- **`clone3` Strategy:** Modern glibc and musl runtimes attempt the `clone3` syscall by default. However, `clone3` passes its flags pointer in userspace memory (`struct clone_args`), which classic seccomp cannot inspect without deep BPF filtering. In `default` mode, `minirun` returns `ENOSYS` on `clone3`. Standard C libraries interpret `ENOSYS` as an unsupported kernel syscall and immediately fall back to classic `clone()`, allowing `minirun` to safely inspect namespace flags while preserving full multi-threading compatibility.
+
+### Privileges & `NO_NEW_PRIVS`
+
+Installing a Seccomp filter requires either `CAP_SYS_ADMIN` in the current user namespace or the `PR_SET_NO_NEW_PRIVS` bit set via `prctl`:
+- **Rootless & Non-Root Execution:** `PR_SET_NO_NEW_PRIVS` is set automatically.
+- **Privileged Root Containers:** In root containers with `CAP_SYS_ADMIN`, `PR_SET_NO_NEW_PRIVS` is omitted by default so that standard setuid utilities (such as `ping` or `sudo`) continue to function inside the container.
+- **Explicit Flag (`--no-new-privs`):** Pass `--no-new-privs` to unconditionally lock down root containers against setuid privilege escalation.
+
+### Threat Model & Limitations
+
+* **Denylist vs. Allowlist Tradeoff:** Denylists are practical for general-purpose container runtimes to avoid breaking arbitrary userland tools, but allowlists provide strictly superior security by denying unknown syscalls by default.
+* **x32 ABI Bypass (`CONFIG_X86_X32_ABI=y`):** On x86_64 kernels compiled with x32 ABI support, syscall numbers with bit 30 set (`0x40000000`) target the x32 ABI. Because these numbers differ from x86_64 numbers, an attacker using raw syscalls with the x32 bit set can bypass a 64-bit-only denylist unless the architecture is strictly restricted or x32 syscalls are rejected.
+* **Audit Mode Log Routing:** Under `--seccomp audit`, violations route directly to the Linux kernel audit subsystem (`auditd` / `dmesg`), independent of Guard's eBPF ring buffer.
+* **Capabilities vs. Seccomp:** Seccomp restricts syscall invocation, but does NOT replace Linux capability bounding set reduction (`cap_drop`). A root container retaining `CAP_SYS_ADMIN` with write access to host-shared pseudo-files (such as cgroup v1 `release_agent`) can achieve host escape via standard file operations without calling restricted syscalls. Capability bounding set dropping is tracked on the roadmap.
 
 ---
 

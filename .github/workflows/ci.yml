@@ -40,10 +40,17 @@ jobs:
       - name: Run Guard Integration Tests (sudo)
         run: |
           sudo -E ./tests/test_guard.sh 2>&1 | tee test_guard.log
+      - name: Run Seccomp Integration Tests (sudo)
+        run: |
+          sudo -E ./tests/test_seccomp.sh 2>&1 | tee test_seccomp.log
       - name: Publish Test Summary
         if: always()
         run: |
           echo "### Guard Integration Test Log" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat test_guard.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No test log found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "### Seccomp Integration Test Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat test_seccomp.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No test log found" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

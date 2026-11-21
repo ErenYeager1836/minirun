@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# minirun Seccomp-BPF Integration Test Suite
+# ==============================================================================
+# Verifies synchronous syscall filtering, default denylist, clone3 ENOSYS fallback,
+# clone CLONE_NEW* flag inspection, audit mode, and strict rejection.
+# ==============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MINIRUN_BIN="${REPO_DIR}/target/debug/minirun"
+TESTER_BIN="${REPO_DIR}/target/debug/seccomp_tester"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+PASSED_COUNT=0
+FAILED_COUNT=0
+
+log_info() {
+    echo -e "${CYAN}[INFO]${NC} $*"
+}
+
+log_pass() {
+    echo -e "${GREEN}[PASS]${NC} $*"
+    PASSED_COUNT=$((PASSED_COUNT + 1))
+}
+
+log_fail() {
+    echo -e "${RED}[FAIL]${NC} $*"
+    FAILED_COUNT=$((FAILED_COUNT + 1))
+}
+
+log_skip() {
+    echo -e "${YELLOW}[SKIP]${NC} $*"
+}
+
+# ------------------------------------------------------------------------------
+# Pre-flight Checks
+# ------------------------------------------------------------------------------
+log_info "Checking environment prerequisites for minirun Seccomp..."
+
+if [ "$(id -u)" -ne 0 ]; then
+    log_skip "Seccomp integration tests require root privileges for container namespace setup."
+    log_skip "To run these tests, execute: sudo ./tests/test_seccomp.sh"
+    exit 0
+fi
+
+if [ ! -x "${MINIRUN_BIN}" ] || [ ! -x "${TESTER_BIN}" ]; then
+    log_info "Building minirun and seccomp_tester binaries..."
+    cargo build --manifest-path "${REPO_DIR}/Cargo.toml" --bin minirun --bin seccomp_tester
+fi
+
+echo "=============================================================================="
+echo " Running minirun Seccomp Test Scenarios"
+echo "=============================================================================="
+
+# ------------------------------------------------------------------------------
+# Test 1: Filter Installation Verification (/proc/self/status)
+# ------------------------------------------------------------------------------
+log_info "Test 1a: Container without --seccomp shows Seccomp: 0"
+OUT_1A=$("${MINIRUN_BIN}" run -- /bin/sh -c "grep Seccomp /proc/self/status" 2>&1 || true)
+if echo "${OUT_1A}" | grep -q "Seccomp:[[:space:]]*0"; then
+    log_pass "Baseline container has Seccomp disabled (Seccomp: 0)."
+else
+    log_fail "Expected Seccomp: 0 without --seccomp flag: ${OUT_1A}"
+fi
+
+log_info "Test 1b: Container with --seccomp default shows Seccomp: 2"
+OUT_1B=$("${MINIRUN_BIN}" run --seccomp default -- /bin/sh -c "grep Seccomp /proc/self/status" 2>&1 || true)
+if echo "${OUT_1B}" | grep -q "Seccomp:[[:space:]]*2"; then
+    log_pass "Seccomp default profile is active in kernel (Seccomp: 2)."
+else
+    log_fail "Expected Seccomp: 2 with --seccomp default: ${OUT_1B}"
+fi
+
+# ------------------------------------------------------------------------------
+# Test 2: Control Assertions (Operations Succeed WITHOUT --seccomp)
+# ------------------------------------------------------------------------------
+log_info "Test 2: Control assertions without --seccomp"
+CTRL_UNSHARE=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" unshare 2>&1 || true)
+if echo "${CTRL_UNSHARE}" | grep -q "res=0"; then
+    log_pass "Control assertion: unshare(CLONE_NEWUSER) succeeds when seccomp is disabled."
+else
+    log_fail "Control assertion failed: unshare did not succeed without seccomp: ${CTRL_UNSHARE}"
+fi
+
+# ------------------------------------------------------------------------------
+# Test 3: Blocked Syscalls return EPERM under --seccomp default
+# ------------------------------------------------------------------------------
+log_info "Test 3a: ptrace returns EPERM (errno 1)"
+OUT_PTRACE=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" ptrace 2>&1 || true)
+if echo "${OUT_PTRACE}" | grep -q "res=-1,errno=1"; then
+    log_pass "ptrace returned EPERM as expected."
+else
+    log_fail "ptrace was not denied with EPERM: ${OUT_PTRACE}"
+fi
+
+log_info "Test 3b: unshare(CLONE_NEWUSER) returns EPERM (errno 1)"
+OUT_UNSHARE=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" unshare 2>&1 || true)
+if echo "${OUT_UNSHARE}" | grep -q "res=-1,errno=1"; then
+    log_pass "unshare(CLONE_NEWUSER) returned EPERM as expected."
+else
+    log_fail "unshare was not denied with EPERM: ${OUT_UNSHARE}"
+fi
+
+log_info "Test 3c: clone(CLONE_NEWUSER) returns EPERM (errno 1)"
+OUT_CLONE=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" clone_newuser 2>&1 || true)
+if echo "${OUT_CLONE}" | grep -q "res=-1,errno=1"; then
+    log_pass "clone with CLONE_NEWUSER returned EPERM as expected."
+else
+    log_fail "clone with CLONE_NEWUSER was not denied with EPERM: ${OUT_CLONE}"
+fi
+
+log_info "Test 3d: mount returns EPERM (errno 1)"
+OUT_MOUNT=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" mount 2>&1 || true)
+if echo "${OUT_MOUNT}" | grep -q "res=-1,errno=1"; then
+    log_pass "mount returned EPERM as expected."
+else
+    log_fail "mount was not denied with EPERM: ${OUT_MOUNT}"
+fi
+
+log_info "Test 3e: fsopen (new mount API, syscall 430) returns EPERM (errno 1)"
+OUT_FSOPEN=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" fsopen 2>&1 || true)
+if echo "${OUT_FSOPEN}" | grep -q "res=-1,errno=1"; then
+    log_pass "fsopen returned EPERM as expected."
+else
+    log_fail "fsopen was not denied with EPERM: ${OUT_FSOPEN}"
+fi
+
+log_info "Test 3f: bpf (syscall 321) returns EPERM (errno 1)"
+OUT_BPF=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" bpf 2>&1 || true)
+if echo "${OUT_BPF}" | grep -q "res=-1,errno=1"; then
+    log_pass "bpf syscall returned EPERM as expected."
+else
+    log_fail "bpf syscall was not denied with EPERM: ${OUT_BPF}"
+fi
+
+# ------------------------------------------------------------------------------
+# Test 4: Non-Regression Standard Workloads under --seccomp default
+# ------------------------------------------------------------------------------
+log_info "Test 4a: Normal command execution (echo hello)"
+OUT_ECHO=$("${MINIRUN_BIN}" run --seccomp default -- /bin/echo "hello_seccomp" 2>&1 || true)
+if echo "${OUT_ECHO}" | grep -q "hello_seccomp"; then
+    log_pass "Normal command execution works under seccomp default."
+else
+    log_fail "Normal command failed under seccomp default: ${OUT_ECHO}"
+fi
+
+log_info "Test 4b: Subshell & fork() execution"
+OUT_FORK=$("${MINIRUN_BIN}" run --seccomp default -- /bin/sh -c 'sh -c "echo forked_alive"' 2>&1 || true)
+if echo "${OUT_FORK}" | grep -q "forked_alive"; then
+    log_pass "Subshell fork() works under seccomp default."
+else
+    log_fail "Subshell fork() failed under seccomp default: ${OUT_FORK}"
+fi
+
+log_info "Test 4c: Shell pipeline (echo | cat)"
+OUT_PIPE=$("${MINIRUN_BIN}" run --seccomp default -- /bin/sh -c 'echo "pipe_alive" | cat' 2>&1 || true)
+if echo "${OUT_PIPE}" | grep -q "pipe_alive"; then
+    log_pass "Shell pipeline works under seccomp default."
+else
+    log_fail "Shell pipeline failed under seccomp default: ${OUT_PIPE}"
+fi
+
+log_info "Test 4d: Threading (verifies clone3 ENOSYS fallback to clone)"
+OUT_THREAD=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" threading 2>&1 || true)
+if echo "${OUT_THREAD}" | grep -q "thread_alive"; then
+    log_pass "Threading succeeded via clone3 ENOSYS fallback to clone()."
+else
+    log_fail "Threading failed under seccomp default: ${OUT_THREAD}"
+fi
+
+# ------------------------------------------------------------------------------
+# Test 5: Audit Mode (--seccomp audit allows call, observe-only)
+# ------------------------------------------------------------------------------
+log_info "Test 5: Audit mode allows unshare without returning EPERM"
+OUT_AUDIT=$("${MINIRUN_BIN}" run --seccomp audit -- "${TESTER_BIN}" unshare 2>&1 || true)
+if echo "${OUT_AUDIT}" | grep -q "res=0"; then
+    log_pass "Audit mode allowed unshare(CLONE_NEWUSER) without returning EPERM."
+else
+    log_fail "Audit mode blocked unshare: ${OUT_AUDIT}"
+fi
+
+# ------------------------------------------------------------------------------
+# Test 6: Strict Mode Rejection (--seccomp strict)
+# ------------------------------------------------------------------------------
+log_info "Test 6: Strict mode returns 'not yet implemented' error"
+set +e
+OUT_STRICT=$("${MINIRUN_BIN}" run --seccomp strict -- /bin/echo "strict_test" 2>&1)
+EXIT_STRICT=$?
+set -e
+
+if [ "${EXIT_STRICT}" -ne 0 ] && echo "${OUT_STRICT}" | grep -iq "not yet implemented"; then
+    log_pass "Strict mode rejected with clear 'not yet implemented' error (exit: ${EXIT_STRICT})."
+else
+    log_fail "Strict mode did not reject as expected: ${OUT_STRICT}"
+fi
+
+# ------------------------------------------------------------------------------
+# Test 7: Rootless Mode with Seccomp (--rootless --seccomp default)
+# ------------------------------------------------------------------------------
+log_info "Test 7: Rootless mode with --seccomp default installs filter"
+OUT_ROOTLESS=$("${MINIRUN_BIN}" run --rootless --seccomp default -- /bin/sh -c "grep Seccomp /proc/self/status" 2>&1 || true)
+if echo "${OUT_ROOTLESS}" | grep -q "Seccomp:[[:space:]]*2"; then
+    log_pass "Rootless container installed Seccomp filter successfully (Seccomp: 2)."
+else
+    log_fail "Rootless container failed to install Seccomp filter: ${OUT_ROOTLESS}"
+fi
+
+# ------------------------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------------------------
+echo "=============================================================================="
+echo -e "Results: ${GREEN}${PASSED_COUNT} Passed${NC}, ${RED}${FAILED_COUNT} Failed${NC}"
+echo "=============================================================================="
+
+if [ "${FAILED_COUNT}" -gt 0 ]; then
+    exit 1
+fi
+exit 0

@@ -76,6 +76,33 @@ fn measure_openat_close(path: &CString, iterations: usize) -> f64 {
     (elapsed.as_nanos() as f64) / (iterations as f64)
 }
 
+/// Measures the average latency (in nanoseconds) per unhooked syscall: getppid().
+fn measure_getppid(iterations: usize) -> f64 {
+    let mut sum = 0i32;
+    let start = Instant::now();
+
+    for _ in 0..iterations {
+        let p = unsafe { libc::getppid() };
+        sum = sum.wrapping_add(p);
+    }
+
+    let elapsed = start.elapsed();
+    black_box(sum);
+
+    (elapsed.as_nanos() as f64) / (iterations as f64)
+}
+
+fn benchmark_getppid_condition(name: &str, rounds: usize, iterations: usize) -> RunStats {
+    measure_getppid(50_000); // warmup
+    let mut samples = Vec::with_capacity(rounds);
+    for r in 1..=rounds {
+        let latency = measure_getppid(iterations);
+        println!("  [getppid Round {}/{}] {:.2} ns / getppid", r, rounds, latency);
+        samples.push(latency);
+    }
+    RunStats::new(name, samples)
+}
+
 fn benchmark_condition(name: &str, rounds: usize, iterations_per_round: usize) -> RunStats {
     let path = CString::new("/dev/null").expect("valid CString");
 
@@ -135,11 +162,18 @@ fn main() -> Result<()> {
     // Condition 1: Guard Unloaded (Baseline)
     // -------------------------------------------------------------------------
     println!("\n>>> Condition 1: Guard Unloaded (Baseline)");
-    println!("Executing {} rounds of {} iterations...", rounds, iterations);
-    let stats_unloaded = benchmark_condition("Guard Unloaded", rounds, iterations);
+    println!("Executing {} rounds of {} iterations of openat+close...", rounds, iterations);
+    let stats_unloaded = benchmark_condition("Guard Unloaded (openat+close)", rounds, iterations);
     println!(
         "-> Result: Median = {:.2} ns, Mean = {:.2} ns (±{:.2} ns), Min = {:.2} ns, Max = {:.2} ns",
         stats_unloaded.median, stats_unloaded.mean, stats_unloaded.std_dev, stats_unloaded.min, stats_unloaded.max
+    );
+
+    println!("Executing {} rounds of {} iterations of unhooked getppid()...", rounds, iterations);
+    let stats_unloaded_ppid = benchmark_getppid_condition("Guard Unloaded (getppid)", rounds, iterations);
+    println!(
+        "-> getppid Result: Median = {:.2} ns, Mean = {:.2} ns (±{:.2} ns), Min = {:.2} ns, Max = {:.2} ns",
+        stats_unloaded_ppid.median, stats_unloaded_ppid.mean, stats_unloaded_ppid.std_dev, stats_unloaded_ppid.min, stats_unloaded_ppid.max
     );
 
     // -------------------------------------------------------------------------
@@ -149,11 +183,18 @@ fn main() -> Result<()> {
     println!("Loading Guard eBPF skeleton (audit mode) and attaching 8 tracepoint probes...");
     let mut guard = Guard::new(GuardMode::Audit, false)
         .context("Failed to load and attach Guard eBPF probes")?;
-    println!("Guard attached. Executing {} rounds on the host (early cgroup filter exit)...", rounds);
-    let stats_loaded_idle = benchmark_condition("Guard Loaded (Idle)", rounds, iterations);
+    println!("Guard attached. Executing {} rounds of openat+close on the host...", rounds);
+    let stats_loaded_idle = benchmark_condition("Guard Loaded (openat+close)", rounds, iterations);
     println!(
         "-> Result: Median = {:.2} ns, Mean = {:.2} ns (±{:.2} ns), Min = {:.2} ns, Max = {:.2} ns",
         stats_loaded_idle.median, stats_loaded_idle.mean, stats_loaded_idle.std_dev, stats_loaded_idle.min, stats_loaded_idle.max
+    );
+
+    println!("Executing {} rounds of {} iterations of unhooked getppid() on the host...", rounds, iterations);
+    let stats_loaded_ppid = benchmark_getppid_condition("Guard Loaded (getppid)", rounds, iterations);
+    println!(
+        "-> getppid Result: Median = {:.2} ns, Mean = {:.2} ns (±{:.2} ns), Min = {:.2} ns, Max = {:.2} ns",
+        stats_loaded_ppid.median, stats_loaded_ppid.mean, stats_loaded_ppid.std_dev, stats_loaded_ppid.min, stats_loaded_ppid.max
     );
 
     // -------------------------------------------------------------------------
@@ -223,25 +264,28 @@ fn main() -> Result<()> {
     let delta_busy = stats_loaded_busy.median - stats_unloaded.median;
     let pct_busy = (delta_busy / stats_unloaded.median) * 100.0;
 
+    let delta_ppid = stats_loaded_ppid.median - stats_unloaded_ppid.median;
+    let pct_ppid = (delta_ppid / stats_unloaded_ppid.median) * 100.0;
+
     println!("\n==============================================================================");
     println!(" BENCHMARK RESULTS SUMMARY (Medians over {} rounds of {} iterations)", rounds, iterations);
     println!("==============================================================================");
     println!("Platform: {} | Kernel: {}", cpu_model, kernel_release);
-    println!("Operation: openat(AT_FDCWD, \"/dev/null\", O_RDONLY) + close(fd)\n");
+    println!("Operation 1: openat(AT_FDCWD, \"/dev/null\", O_RDONLY) + close(fd) [Hooked probe: openat]");
+    println!("Operation 2: getppid() [Unhooked raw syscall]\n");
 
-    println!("| Condition | Median Latency | Mean ± StdDev | Overhead vs Baseline |");
+    println!("| Syscall Operation | Guard Unloaded | Guard Loaded (Idle) | Overhead (Tax) |");
     println!("| :--- | :--- | :--- | :--- |");
     println!(
-        "| **1. Guard Unloaded (Baseline)** | **{:.2} ns** | {:.2} ± {:.2} ns | Baseline (0.00 ns) |",
-        stats_unloaded.median, stats_unloaded.mean, stats_unloaded.std_dev
+        "| **openat + close** (hooked) | **{:.2} ns** | **{:.2} ns** | **{:+.2} ns ({:+.2}%)** |",
+        stats_unloaded.median, stats_loaded_idle.median, delta_idle, pct_idle
     );
     println!(
-        "| **2. Guard Loaded (No Container)** | **{:.2} ns** | {:.2} ± {:.2} ns | **{:+.2} ns ({:+.2}%)** |",
-        stats_loaded_idle.median, stats_loaded_idle.mean, stats_loaded_idle.std_dev, delta_idle, pct_idle
+        "| **getppid** (unhooked) | **{:.2} ns** | **{:.2} ns** | **{:+.2} ns ({:+.2}%)** |",
+        stats_unloaded_ppid.median, stats_loaded_ppid.median, delta_ppid, pct_ppid
     );
-    println!(
-        "| **3. Guard Loaded (Busy Container)** | **{:.2} ns** | {:.2} ± {:.2} ns | **{:+.2} ns ({:+.2}%)** |",
-        stats_loaded_busy.median, stats_loaded_busy.mean, stats_loaded_busy.std_dev, delta_busy, pct_busy
+    println!("| **openat + close** (busy container) | **{:.2} ns** | **{:.2} ns** | **{:+.2} ns ({:+.2}%)** |",
+        stats_unloaded.median, stats_loaded_busy.median, delta_busy, pct_busy
     );
     println!("==============================================================================");
 

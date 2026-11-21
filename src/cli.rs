@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::guard::GuardMode;
+use crate::seccomp::SeccompMode;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -59,6 +60,14 @@ pub struct RunArgs {
     /// Format Guard security alerts as JSON lines
     #[arg(long)]
     pub guard_json: bool,
+
+    /// Seccomp syscall filtering mode [default|strict|audit|none]
+    #[arg(long, default_value = "none")]
+    pub seccomp: SeccompMode,
+
+    /// Force PR_SET_NO_NEW_PRIVS before installing Seccomp filter (always enabled for rootless/non-root)
+    #[arg(long)]
+    pub no_new_privs: bool,
 
     /// Command to execute inside the container
     #[arg(required = true)]

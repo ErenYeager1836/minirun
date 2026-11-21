@@ -274,6 +274,16 @@ impl ContainerRuntime {
                     c_args.push(CString::new(arg.clone()).context("Argument contains null byte")?);
                 }
 
+                // 5. Install Seccomp-BPF filter (LAST step before execvp!)
+                // All mounts, rootfs isolation, and proc remounts are complete.
+                if self.args.seccomp != crate::seccomp::SeccompMode::None {
+                    let needs_nnp = self.args.rootless
+                        || !nix::unistd::getuid().is_root()
+                        || self.args.no_new_privs;
+                    crate::seccomp::SeccompManager::apply(self.args.seccomp, needs_nnp)
+                        .context("Failed to apply Seccomp filter")?;
+                }
+
                 info!("Executing as PID 1: {} {:?}", self.args.command, self.args.args);
                 let err = nix::unistd::execvp(&c_command, &c_args).unwrap_err();
                 Err(err).with_context(|| format!("Failed to exec command: '{}'", self.args.command))
