@@ -121,6 +121,16 @@ sudo target/release/minirun run --seccomp audit /bin/sh
 sudo target/release/minirun run --seccomp default --no-new-privs /bin/sh
 ```
 
+### 6. Interactive Demo
+Run the end-to-end interactive demonstration (demonstrating doctor diagnostics, seccomp unshare blocking, Guard sensitive path auditing, and active reverse shell enforcement):
+```bash
+./scripts/demo.sh
+```
+Or play back the recorded asciinema cast:
+```bash
+asciinema play demo.cast
+```
+
 ---
 
 ## eBPF Runtime Guard

@@ -33,7 +33,7 @@ step() {
     sleep 1.2
 }
 
-clear
+clear 2>/dev/null || true
 echo -e "${BOLD}minirun - Linux Container Runtime & eBPF Active Defense${NC}"
 echo -e "Demonstration: Namespaces, Cgroups v2, Seccomp-BPF & Guard\n"
 sleep 1
@@ -52,7 +52,7 @@ sleep 2
 # 3. Guard Telemetry (Audit Mode)
 step "3. Guard Telemetry in Audit Mode (--guard audit)..."
 echo "Simulating credential access: cat /etc/shadow..."
-sudo "${MINIRUN}" run --guard audit -- sh -c 'cat /etc/shadow 2>/dev/null || true'
+sudo "${MINIRUN}" run --guard audit -- sh -c 'cat /etc/shadow >/dev/null 2>&1 || true'
 sleep 2
 
 # 4. Guard Active Enforcement (Enforce Mode)
