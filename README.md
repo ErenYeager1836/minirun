@@ -1,5 +1,7 @@
 # minirun
 
+[![CI](https://github.com/ErenYeager1836/minirun/actions/workflows/ci.yml/badge.svg)](https://github.com/ErenYeager1836/minirun/actions/workflows/ci.yml)
+
 An OCI-style lightweight Linux container runtime written from scratch in **Rust** using direct POSIX and Linux kernel syscalls.
 
 `minirun` demonstrates how containerization works under the hood without relying on Docker, containerd, runc, or any external runtime daemon.

@@ -82,12 +82,52 @@ fi
 # ------------------------------------------------------------------------------
 # Test 2: Control Assertions (Operations Succeed WITHOUT --seccomp)
 # ------------------------------------------------------------------------------
-log_info "Test 2: Control assertions without --seccomp"
+log_info "Test 2a: Control assertion - ptrace succeeds without seccomp"
+CTRL_PTRACE=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" ptrace 2>&1 || true)
+if echo "${CTRL_PTRACE}" | grep -q "res=0,errno=0"; then
+    log_pass "Control assertion: ptrace succeeds when seccomp is disabled."
+else
+    log_fail "Control assertion failed: ptrace did not succeed without seccomp: ${CTRL_PTRACE}"
+fi
+
+log_info "Test 2b: Control assertion - unshare succeeds without seccomp"
 CTRL_UNSHARE=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" unshare 2>&1 || true)
 if echo "${CTRL_UNSHARE}" | grep -q "res=0"; then
     log_pass "Control assertion: unshare(CLONE_NEWUSER) succeeds when seccomp is disabled."
 else
     log_fail "Control assertion failed: unshare did not succeed without seccomp: ${CTRL_UNSHARE}"
+fi
+
+log_info "Test 2c: Control assertion - clone_newuser succeeds without seccomp"
+CTRL_CLONE=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" clone_newuser 2>&1 || true)
+if echo "${CTRL_CLONE}" | grep -E -q "res=[1-9][0-9]*,errno=0"; then
+    log_pass "Control assertion: clone(CLONE_NEWUSER) succeeds when seccomp is disabled."
+else
+    log_fail "Control assertion failed: clone_newuser did not succeed without seccomp: ${CTRL_CLONE}"
+fi
+
+log_info "Test 2d: Control assertion - mount succeeds without seccomp"
+CTRL_MOUNT=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" mount 2>&1 || true)
+if echo "${CTRL_MOUNT}" | grep -q "res=0,errno=0"; then
+    log_pass "Control assertion: mount succeeds when seccomp is disabled."
+else
+    log_fail "Control assertion failed: mount did not succeed without seccomp: ${CTRL_MOUNT}"
+fi
+
+log_info "Test 2e: Control assertion - fsopen succeeds without seccomp"
+CTRL_FSOPEN=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" fsopen 2>&1 || true)
+if echo "${CTRL_FSOPEN}" | grep -E -q "res=[3-9][0-9]*,errno=0|res=[1-2][0-9]+,errno=0"; then
+    log_pass "Control assertion: fsopen succeeds when seccomp is disabled."
+else
+    log_fail "Control assertion failed: fsopen did not succeed without seccomp: ${CTRL_FSOPEN}"
+fi
+
+log_info "Test 2f: Control assertion - bpf reaches kernel handler without seccomp"
+CTRL_BPF=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" bpf 2>&1 || true)
+if echo "${CTRL_BPF}" | grep -q "errno=22"; then
+    log_pass "Control assertion: bpf reaches kernel handler (EINVAL) without seccomp boundary rejection."
+else
+    log_fail "Control assertion failed: bpf did not reach kernel handler without seccomp: ${CTRL_BPF}"
 fi
 
 # ------------------------------------------------------------------------------
@@ -179,12 +219,19 @@ fi
 # ------------------------------------------------------------------------------
 # Test 5: Audit Mode (--seccomp audit allows call, observe-only)
 # ------------------------------------------------------------------------------
-log_info "Test 5: Audit mode allows unshare without returning EPERM"
+log_info "Test 5a: Audit mode allows unshare without returning EPERM"
 OUT_AUDIT=$("${MINIRUN_BIN}" run --seccomp audit -- "${TESTER_BIN}" unshare 2>&1 || true)
 if echo "${OUT_AUDIT}" | grep -q "res=0"; then
     log_pass "Audit mode allowed unshare(CLONE_NEWUSER) without returning EPERM."
 else
     log_fail "Audit mode blocked unshare: ${OUT_AUDIT}"
+fi
+
+log_info "Test 5b: Audit mode emits kernel audit log (SECCOMP_RET_LOG)"
+if dmesg 2>/dev/null | grep -q "comm=\"seccomp_tester\".*syscall=272.*code=0x7ffc0000"; then
+    log_pass "Audit record (syscall=272, code=0x7ffc0000) verified in dmesg."
+else
+    log_skip "dmesg audit log check skipped (dmesg restricted or auditd forwarding enabled)."
 fi
 
 # ------------------------------------------------------------------------------
