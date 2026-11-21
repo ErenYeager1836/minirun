@@ -179,7 +179,7 @@ asciinema play demo.cast
 4. **File Descriptor Redirection (`sys_enter_dup2`, `sys_enter_dup3`):**
    - Emits events when `newfd` is 0 (stdin), 1 (stdout), or 2 (stderr).
 5. **Reverse Shell Correlation:**
-   - Detects reverse shell creation: socket `connect()` followed by `dup2(..., 0/1/2)` redirecting stdio onto the socket (triggering detection and active termination immediately upon stdio redirection, before arbitrary code or shell execution can proceed).
+   - Detects reverse shell creation: socket `connect()` followed by `dup2(..., 0/1/2)` redirecting stdio onto the socket (triggering correlation and asynchronous container termination via `cgroup.kill` within milliseconds of the stdio redirect).
    - Also correlates multi-process sequences where subsequent process execution (`exec`) inherits previously redirected network socket descriptors across process lineages via `ppid` inheritance.
 
 ### Host PID Semantics
