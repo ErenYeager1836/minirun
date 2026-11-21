@@ -10,8 +10,22 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MINIRUN_BIN="${REPO_DIR}/target/debug/minirun"
-TESTER_BIN="${REPO_DIR}/target/debug/seccomp_tester"
+
+if [ -z "${MINIRUN_BIN:-}" ]; then
+    if [ -x "${REPO_DIR}/target/release/minirun" ] && [ "${REPO_DIR}/target/release/minirun" -nt "${REPO_DIR}/target/debug/minirun" ]; then
+        MINIRUN_BIN="${REPO_DIR}/target/release/minirun"
+    else
+        MINIRUN_BIN="${REPO_DIR}/target/debug/minirun"
+    fi
+fi
+
+if [ -z "${TESTER_BIN:-}" ]; then
+    if [ -x "${REPO_DIR}/target/release/seccomp_tester" ] && [ "${REPO_DIR}/target/release/seccomp_tester" -nt "${REPO_DIR}/target/debug/seccomp_tester" ]; then
+        TESTER_BIN="${REPO_DIR}/target/release/seccomp_tester"
+    else
+        TESTER_BIN="${REPO_DIR}/target/debug/seccomp_tester"
+    fi
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
