@@ -133,12 +133,17 @@ else
     log_fail "Control assertion failed: bpf did not reach kernel handler without seccomp: ${CTRL_BPF}"
 fi
 
-log_info "Test 2g: Control assertion - x32 ptrace passes seccomp boundary without seccomp"
+log_info "Test 2g: Control assertion - x32 ptrace behavior without seccomp"
 CTRL_X32=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" x32_ptrace 2>&1 || true)
-if echo "${CTRL_X32}" | grep -q "res=0,errno=0"; then
-    log_pass "Control assertion: x32 ptrace executes without filter rejection."
+# Note: On kernels where x32 is disabled at boot (e.g. syscall.x32=off), the kernel returns ENOSYS (errno 38).
+# With minirun's --seccomp default profile, our BPF prefix intercepts nr >= 0x40000000 and returns EPERM (errno 1),
+# proving the filter enforces the sandbox boundary rather than relying on ambient kernel boot configuration.
+if echo "${CTRL_X32}" | grep -q "errno=38"; then
+    log_pass "Control assertion: x32 ptrace without seccomp returns kernel default ENOSYS (syscall.x32=off)."
+elif echo "${CTRL_X32}" | grep -q "res=0,errno=0"; then
+    log_pass "Control assertion: x32 ptrace without seccomp executes successfully (syscall.x32=y active)."
 else
-    log_skip "Control assertion for x32 ptrace skipped (kernel without CONFIG_X86_X32_ABI or unsupported)."
+    log_fail "Control assertion failed: unexpected x32 behavior without seccomp: ${CTRL_X32}"
 fi
 
 # ------------------------------------------------------------------------------
@@ -192,12 +197,12 @@ else
     log_fail "bpf syscall was not denied with EPERM: ${OUT_BPF}"
 fi
 
-log_info "Test 3g: x32 ABI syscalls return ENOSYS (errno 38) under --seccomp default"
+log_info "Test 3g: x32 ABI syscalls return EPERM (errno 1) under --seccomp default"
 OUT_X32_BLOCKED=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" x32_ptrace 2>&1 || true)
-if echo "${OUT_X32_BLOCKED}" | grep -q "res=-1,errno=38"; then
-    log_pass "x32 ABI syscall returned ENOSYS (errno 38), closing x32 denylist bypass."
+if echo "${OUT_X32_BLOCKED}" | grep -q "res=-1,errno=1"; then
+    log_pass "x32 ABI syscall returned EPERM (errno 1), closing x32 denylist bypass via BPF prefix."
 else
-    log_fail "x32 ABI syscall was not rejected with ENOSYS: ${OUT_X32_BLOCKED}"
+    log_fail "x32 ABI syscall was not rejected with EPERM by BPF prefix: ${OUT_X32_BLOCKED}"
 fi
 
 # ------------------------------------------------------------------------------
@@ -251,6 +256,14 @@ if dmesg 2>/dev/null | grep -q "comm=\"seccomp_tester\".*syscall=272.*code=0x7ff
     log_pass "Audit record (syscall=272, code=0x7ffc0000) verified in dmesg."
 else
     log_skip "dmesg audit log check skipped (dmesg restricted or auditd forwarding enabled)."
+fi
+
+log_info "Test 5c: Audit mode remains observe-only for x32 syscalls"
+OUT_AUDIT_X32=$("${MINIRUN_BIN}" run --seccomp audit -- "${TESTER_BIN}" x32_ptrace 2>&1 || true)
+if echo "${OUT_AUDIT_X32}" | grep -q "errno=38"; then
+    log_pass "Audit mode allowed x32 syscall to pass to kernel without returning EPERM (observe-only)."
+else
+    log_fail "Audit mode unexpectedly altered x32 syscall behavior: ${OUT_AUDIT_X32}"
 fi
 
 # ------------------------------------------------------------------------------

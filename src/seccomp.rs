@@ -186,35 +186,39 @@ mod backend {
                     // Prepend classic BPF prefix:
                     // 1. Load seccomp_data.nr (offset 0)
                     // 2. If nr >= 0x40000000 (x32 ABI bit), fall through to return
-                    // 3. Return ERRNO(ENOSYS)
+                    // 3. Return ERRNO(EPERM) in Default mode, or SECCOMP_RET_LOG in Audit mode.
                     // If nr < 0x40000000, jump over return instruction to the existing compiled filter.
                     // Because existing program jumps are relative, prepending preserves them intact.
-                    if !is_audit {
-                        let x32_prefix = [
-                            sock_filter {
-                                code: 0x20, // BPF_LD | BPF_W | BPF_ABS
-                                jt: 0,
-                                jf: 0,
-                                k: 0, // offsetof(struct seccomp_data, nr)
-                            },
-                            sock_filter {
-                                code: 0x35, // BPF_JMP | BPF_JGE | BPF_K
-                                jt: 0,      // nr >= 0x40000000 -> execute return instruction
-                                jf: 1,      // nr < 0x40000000 -> jump over return (into denylist)
-                                k: 0x40000000, // X32 syscall bit
-                            },
-                            sock_filter {
-                                code: 0x06, // BPF_RET | BPF_K
-                                jt: 0,
-                                jf: 0,
-                                k: 0x00050000 | (libc::ENOSYS as u32), // SECCOMP_RET_ERRNO | ENOSYS
-                            },
-                        ];
-                        let mut combined = Vec::with_capacity(x32_prefix.len() + denylist_prog.len());
-                        combined.extend_from_slice(&x32_prefix);
-                        combined.extend(denylist_prog);
-                        denylist_prog = combined;
-                    }
+                    let x32_action = if is_audit {
+                        0x7ffc0000 // SECCOMP_RET_LOG: log attempted x32 syscall to kernel audit log, observe-only
+                    } else {
+                        0x00050000 | (libc::EPERM as u32) // SECCOMP_RET_ERRNO | EPERM: reject x32 syscalls
+                    };
+
+                    let x32_prefix = [
+                        sock_filter {
+                            code: 0x20, // BPF_LD | BPF_W | BPF_ABS
+                            jt: 0,
+                            jf: 0,
+                            k: 0, // offsetof(struct seccomp_data, nr)
+                        },
+                        sock_filter {
+                            code: 0x35, // BPF_JMP | BPF_JGE | BPF_K
+                            jt: 0,      // nr >= 0x40000000 -> execute x32 action (EPERM or LOG)
+                            jf: 1,      // nr < 0x40000000 -> jump over action (continue to denylist)
+                            k: 0x40000000, // X32 syscall bit
+                        },
+                        sock_filter {
+                            code: 0x06, // BPF_RET | BPF_K
+                            jt: 0,
+                            jf: 0,
+                            k: x32_action,
+                        },
+                    ];
+                    let mut combined = Vec::with_capacity(x32_prefix.len() + denylist_prog.len());
+                    combined.extend_from_slice(&x32_prefix);
+                    combined.extend(denylist_prog);
+                    denylist_prog = combined;
 
                     Ok(Some((clone3_prog, denylist_prog)))
                 }
