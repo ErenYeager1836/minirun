@@ -122,12 +122,23 @@ else
     log_fail "Control assertion failed: fsopen did not succeed without seccomp: ${CTRL_FSOPEN}"
 fi
 
+# Note: bpf(BPF_MAP_CREATE, NULL) returns EINVAL (errno 22) without seccomp
+# because NULL attributes reach the kernel BPF subsystem; with seccomp default
+# it returns EPERM (errno 1) at the syscall boundary before entering the kernel.
 log_info "Test 2f: Control assertion - bpf reaches kernel handler without seccomp"
 CTRL_BPF=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" bpf 2>&1 || true)
 if echo "${CTRL_BPF}" | grep -q "errno=22"; then
     log_pass "Control assertion: bpf reaches kernel handler (EINVAL) without seccomp boundary rejection."
 else
     log_fail "Control assertion failed: bpf did not reach kernel handler without seccomp: ${CTRL_BPF}"
+fi
+
+log_info "Test 2g: Control assertion - x32 ptrace passes seccomp boundary without seccomp"
+CTRL_X32=$("${MINIRUN_BIN}" run -- "${TESTER_BIN}" x32_ptrace 2>&1 || true)
+if echo "${CTRL_X32}" | grep -q "res=0,errno=0"; then
+    log_pass "Control assertion: x32 ptrace executes without filter rejection."
+else
+    log_skip "Control assertion for x32 ptrace skipped (kernel without CONFIG_X86_X32_ABI or unsupported)."
 fi
 
 # ------------------------------------------------------------------------------
@@ -179,6 +190,14 @@ if echo "${OUT_BPF}" | grep -q "res=-1,errno=1"; then
     log_pass "bpf syscall returned EPERM as expected."
 else
     log_fail "bpf syscall was not denied with EPERM: ${OUT_BPF}"
+fi
+
+log_info "Test 3g: x32 ABI syscalls return ENOSYS (errno 38) under --seccomp default"
+OUT_X32_BLOCKED=$("${MINIRUN_BIN}" run --seccomp default -- "${TESTER_BIN}" x32_ptrace 2>&1 || true)
+if echo "${OUT_X32_BLOCKED}" | grep -q "res=-1,errno=38"; then
+    log_pass "x32 ABI syscall returned ENOSYS (errno 38), closing x32 denylist bypass."
+else
+    log_fail "x32 ABI syscall was not rejected with ENOSYS: ${OUT_X32_BLOCKED}"
 fi
 
 # ------------------------------------------------------------------------------

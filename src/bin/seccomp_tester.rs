@@ -60,6 +60,12 @@ fn main() {
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             println!("res={},errno={}", res, errno);
         }
+        "x32_ptrace" => {
+            // Syscall nr with x32 ABI bit (0x40000000 | 101)
+            let res = unsafe { libc::syscall(0x40000000 | libc::SYS_ptrace, libc::PTRACE_TRACEME, 0, 0, 0) };
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            println!("res={},errno={}", res, errno);
+        }
         "threading" => {
             let handle = std::thread::spawn(|| {
                 println!("thread_alive");

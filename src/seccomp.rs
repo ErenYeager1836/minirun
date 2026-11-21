@@ -176,9 +176,45 @@ mod backend {
                     )
                     .context("Failed to construct denylist seccomp filter")?;
 
-                    let denylist_prog: BpfProgram = denylist_filter
+                    let mut denylist_prog: BpfProgram = denylist_filter
                         .try_into()
                         .context("Failed to compile denylist filter to BPF")?;
+
+                    use seccompiler::sock_filter;
+
+                    // Close the x32 ABI bypass on kernels with CONFIG_X86_X32_ABI=y.
+                    // Prepend classic BPF prefix:
+                    // 1. Load seccomp_data.nr (offset 0)
+                    // 2. If nr >= 0x40000000 (x32 ABI bit), fall through to return
+                    // 3. Return ERRNO(ENOSYS)
+                    // If nr < 0x40000000, jump over return instruction to the existing compiled filter.
+                    // Because existing program jumps are relative, prepending preserves them intact.
+                    if !is_audit {
+                        let x32_prefix = [
+                            sock_filter {
+                                code: 0x20, // BPF_LD | BPF_W | BPF_ABS
+                                jt: 0,
+                                jf: 0,
+                                k: 0, // offsetof(struct seccomp_data, nr)
+                            },
+                            sock_filter {
+                                code: 0x35, // BPF_JMP | BPF_JGE | BPF_K
+                                jt: 0,      // nr >= 0x40000000 -> execute return instruction
+                                jf: 1,      // nr < 0x40000000 -> jump over return (into denylist)
+                                k: 0x40000000, // X32 syscall bit
+                            },
+                            sock_filter {
+                                code: 0x06, // BPF_RET | BPF_K
+                                jt: 0,
+                                jf: 0,
+                                k: 0x00050000 | (libc::ENOSYS as u32), // SECCOMP_RET_ERRNO | ENOSYS
+                            },
+                        ];
+                        let mut combined = Vec::with_capacity(x32_prefix.len() + denylist_prog.len());
+                        combined.extend_from_slice(&x32_prefix);
+                        combined.extend(denylist_prog);
+                        denylist_prog = combined;
+                    }
 
                     Ok(Some((clone3_prog, denylist_prog)))
                 }

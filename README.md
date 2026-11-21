@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/ErenYeager1836/minirun/actions/workflows/ci.yml/badge.svg)](https://github.com/ErenYeager1836/minirun/actions/workflows/ci.yml)
 
+> [!NOTE]
+> **Educational & Research Sandbox:** `minirun` is an educational container runtime and systems research sandbox designed to demonstrate container primitives and active eBPF defense from scratch. It is not intended as a production multi-tenant container isolation engine.
+
 An OCI-style lightweight Linux container runtime written from scratch in **Rust** using direct POSIX and Linux kernel syscalls.
 
 `minirun` demonstrates how containerization works under the hood without relying on Docker, containerd, runc, or any external runtime daemon.
@@ -258,11 +261,15 @@ Installing a Seccomp filter requires either `CAP_SYS_ADMIN` in the current user 
 ### Threat Model & Limitations
 
 * **Denylist vs. Allowlist Tradeoff:** Denylists are practical for general-purpose container runtimes to avoid breaking arbitrary userland tools, but allowlists provide strictly superior security by denying unknown syscalls by default.
-* **x32 ABI Bypass (`CONFIG_X86_X32_ABI=y`):** On x86_64 kernels compiled with x32 ABI support, syscall numbers with bit 30 set (`0x40000000`) target the x32 ABI. Because these numbers differ from x86_64 numbers, an attacker using raw syscalls with the x32 bit set can bypass a 64-bit-only denylist unless the architecture is strictly restricted or x32 syscalls are rejected.
+* **x32 ABI Mitigation (`CONFIG_X86_X32_ABI=y`):** On x86_64 kernels compiled with x32 ABI support, syscall numbers with bit 30 set (`0x40000000`) target the x32 ABI, which would otherwise bypass a 64-bit-only denylist. `minirun` prepends a classic BPF instruction prefix (`load nr -> jge 0x40000000 -> ret ENOSYS`) that intercepts all x32 ABI syscalls at entry, closing the bypass.
 * **Audit Mode Log Routing:** Under `--seccomp audit`, violations route directly to the Linux kernel audit subsystem (`auditd` / `dmesg`), independent of Guard's eBPF ring buffer.
 * **Capabilities vs. Seccomp:** Seccomp restricts syscall invocation, but does NOT replace Linux capability bounding set reduction (`cap_drop`). A root container retaining `CAP_SYS_ADMIN` with write access to host-shared pseudo-files (such as cgroup v1 `release_agent`) can achieve host escape via standard file operations without calling restricted syscalls. Capability bounding set dropping is tracked on the roadmap.
 
 ---
 
 ## License
-MIT
+
+This project is licensed under the terms of the [MIT License](LICENSE).
+- Userspace container runtime and CLI tools: **MIT License**.
+- In-kernel eBPF security telemetry programs (`bpf/minirun_guard.bpf.c`): **Dual MIT/GPL-2.0 License**.
+- Generated kernel BTF bindings (`vmlinux.h`): Derived from the Linux kernel source tree (**GPL-2.0 with Linux-syscall-note**).

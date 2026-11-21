@@ -19,3 +19,16 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+### Component Licensing Notice
+
+1. **Userspace Runtime (`src/`):**
+   Licensed under the MIT License above.
+
+2. **In-Kernel eBPF Telemetry & Probes (`bpf/`):**
+   Dual-licensed under the MIT License and the GNU General Public License v2.0 (GPL-2.0), as declared via `SEC("license") = "Dual MIT/GPL"` in `bpf/minirun_guard.bpf.c`.
+
+3. **Kernel BTF Header Bindings (`bpf/vmlinux.h`):**
+   Derived from the Linux kernel BTF type information generated via `bpftool btf dump file /sys/kernel/btf/vmlinux format c` and governed by the Linux kernel's licensing terms (GPL-2.0 with Linux-syscall-note).
