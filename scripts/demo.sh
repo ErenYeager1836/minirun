@@ -2,11 +2,9 @@
 # ==============================================================================
 # minirun Interactive Terminal Demo Script
 # ==============================================================================
-# Pre-requisite: Run 'sudo -v' before recording to cache sudo credentials
-# so password prompts do not appear on camera.
-#
-# Suitable for recording with asciinema or VHS:
-#   sudo -v && asciinema rec demo.cast -c ./scripts/demo.sh
+# Recommended recording method (avoids sudo password prompt in asciinema pty):
+#   sudo asciinema rec demo.cast -c ./scripts/demo.sh
+#   sudo chown $USER:$USER demo.cast
 # ==============================================================================
 
 set -euo pipefail

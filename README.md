@@ -3,7 +3,7 @@
 [![CI](https://github.com/ErenYeager1836/minirun/actions/workflows/ci.yml/badge.svg)](https://github.com/ErenYeager1836/minirun/actions/workflows/ci.yml)
 
 > [!NOTE]
-> **Educational & Research Sandbox:** `minirun` is an educational container runtime and systems research sandbox designed to demonstrate container primitives and active eBPF defense from scratch. It is not intended as a production multi-tenant container isolation engine. Built with AI-assisted pair-programming, with human architecture direction, edge-case auditing, and kernel test verification.
+> **Educational & Research Sandbox:** `minirun` is an educational container runtime and systems research sandbox designed to demonstrate container primitives and active eBPF defense from scratch. It is not intended as a production multi-tenant container isolation engine.
 
 A from-scratch lightweight Linux container runtime written in **Rust** using direct POSIX and Linux kernel syscalls.
 
