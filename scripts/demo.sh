@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# minirun v0.1.0 Interactive Terminal Demo Script
+# minirun Interactive Terminal Demo Script
 # ==============================================================================
+# Pre-requisite: Run 'sudo -v' before recording to cache sudo credentials
+# so password prompts do not appear on camera.
+#
 # Suitable for recording with asciinema or VHS:
-#   asciinema rec demo.cast -c ./scripts/demo.sh
+#   sudo -v && asciinema rec demo.cast -c ./scripts/demo.sh
 # ==============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MINIRUN="${REPO_DIR}/target/release/minirun"
 
+# Run from repository root with a clean prompt
+cd "${REPO_DIR}"
+export PS1="minirun$ "
+
+MINIRUN="./target/release/minirun"
 if [ ! -f "${MINIRUN}" ]; then
-    MINIRUN="${REPO_DIR}/target/debug/minirun"
+    MINIRUN="./target/debug/minirun"
 fi
 
 CYAN='\033[0;36m'
@@ -25,11 +32,11 @@ NC='\033[0m'
 
 step() {
     echo -e "\n${BOLD}${CYAN}==> $1${NC}"
-    sleep 1.5
+    sleep 1.2
 }
 
 clear
-echo -e "${BOLD}minirun v0.1.0 - Linux Container Runtime & eBPF Active Defense${NC}"
+echo -e "${BOLD}minirun - Linux Container Runtime & eBPF Active Defense${NC}"
 echo -e "Demonstration: Namespaces, Cgroups v2, Seccomp-BPF & Guard\n"
 sleep 1
 

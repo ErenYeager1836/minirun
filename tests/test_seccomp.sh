@@ -66,9 +66,12 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ ! -x "${MINIRUN_BIN}" ] || [ ! -x "${TESTER_BIN}" ]; then
-    log_info "Building minirun and seccomp_tester binaries..."
+    log_info "Binaries not found, building minirun and seccomp_tester..."
     cargo build --manifest-path "${REPO_DIR}/Cargo.toml" --bin minirun --bin seccomp_tester
 fi
+
+log_info "Target minirun binary: ${MINIRUN_BIN} (mtime: $(stat -c '%y' "${MINIRUN_BIN}" 2>/dev/null || stat -f '%Sm' "${MINIRUN_BIN}" 2>/dev/null || echo 'unknown'))"
+log_info "Target tester binary:  ${TESTER_BIN} (mtime: $(stat -c '%y' "${TESTER_BIN}" 2>/dev/null || stat -f '%Sm' "${TESTER_BIN}" 2>/dev/null || echo 'unknown'))"
 
 echo "=============================================================================="
 echo " Running minirun Seccomp Test Scenarios"

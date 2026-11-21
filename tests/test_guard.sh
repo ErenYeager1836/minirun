@@ -68,9 +68,11 @@ if [ ! -f "/sys/fs/cgroup/cgroup.controllers" ]; then
 fi
 
 if [ ! -x "${MINIRUN_BIN}" ]; then
-    log_info "Building minirun binary..."
-    cargo build --manifest-path "${REPO_DIR}/Cargo.toml"
+    log_info "Binary '${MINIRUN_BIN}' not found, building..."
+    cargo build --manifest-path "${REPO_DIR}/Cargo.toml" --bin minirun
 fi
+
+log_info "Target binary: ${MINIRUN_BIN} (mtime: $(stat -c '%y' "${MINIRUN_BIN}" 2>/dev/null || stat -f '%Sm' "${MINIRUN_BIN}" 2>/dev/null || echo 'unknown'))"
 
 TEST_PORT=19876
 
