@@ -9,6 +9,8 @@ A from-scratch lightweight Linux container runtime written in **Rust** using dir
 
 `minirun` demonstrates how containerization works under the hood without relying on Docker, containerd, runc, or any external runtime daemon.
 
+![minirun interactive demonstration](demo.gif)
+
 ---
 
 ## Features
@@ -151,7 +153,7 @@ asciinema play demo.cast
 [ Userspace (Parent Runtime) ]                                                     │
   Guard Telemetry Thread <─────────────────────────────────────────────────────────┘
     ├── Correlation Engine (tgid + ppid lineage with TTL)
-    │     ├── connect -> dup2(0,1,2) -> exec(shell) => [CRITICAL] Reverse Shell
+    │     ├── connect -> dup2 onto stdio {0, 1, 2} => [CRITICAL] Reverse Shell
     │     ├── Heuristic Classifier (recon tools, staging dirs, sensitive paths)
     │     └── Sensitive Access (/etc/shadow, core_pattern, docker.sock)
     └── Active Enforcement (Enforce Mode)
@@ -177,8 +179,8 @@ asciinema play demo.cast
 4. **File Descriptor Redirection (`sys_enter_dup2`, `sys_enter_dup3`):**
    - Emits events when `newfd` is 0 (stdin), 1 (stdout), or 2 (stderr).
 5. **Reverse Shell Correlation:**
-   - Detects the classic reverse-shell sequence: `connect(AF_INET/6) -> dup2(0,1,2) -> exec(shell)` across process lineages via `ppid` inheritance.
-   - Also flags processes that connect after stdin/stdout/stderr have already been redirected (pre-spawned shell).
+   - Detects reverse shell creation: socket `connect()` followed by `dup2(..., 0/1/2)` redirecting stdio onto the socket (triggering detection and active termination immediately upon stdio redirection, before arbitrary code or shell execution can proceed).
+   - Also correlates multi-process sequences where subsequent process execution (`exec`) inherits previously redirected network socket descriptors across process lineages via `ppid` inheritance.
 
 ### Host PID Semantics
 All `pid`, `tgid`, and `ppid` values reported in Guard alerts represent **host-namespace PIDs** (from `bpf_get_current_pid_tgid()` and `real_parent->tgid`), NOT virtualized PIDs inside the container's PID namespace (where the root process is PID 1). Userspace can directly correlate these PIDs against `/sys/fs/cgroup/minirun/<id>/cgroup.procs`.
@@ -187,13 +189,13 @@ All `pid`, `tgid`, and `ppid` values reported in Guard alerts represent **host-n
 
 #### Human-Readable Console Output:
 ```text
-[GUARD ALERT] [CRITICAL] [Container: minirun-1042] [PID: 2841] [comm: python3] reverse shell sequence: connect 10.0.0.1:4444 -> dup2 -> /bin/sh [ENFORCED: KILLED]
+[GUARD ALERT] [CRITICAL] [Container: minirun-1042] [PID: 2841] [comm: python3] reverse shell sequence: connect 10.0.0.1:4444 -> dup2 onto fds {1, 0} [ENFORCED: KILLED]
 [GUARD ALERT] [HIGH] [Container: minirun-1042] [PID: 2845] [comm: cat] Accessed sensitive path: /etc/shadow (flags: 0x0)
 ```
 
 #### JSON Lines Format (`--guard-json`):
 ```json
-{"timestamp":"2026-11-19T21:46:00Z","container_id":"minirun-1042","pid":2841,"tgid":2841,"ppid":2800,"comm":"python3","severity":"CRITICAL","event_type":"REVERSE_SHELL","details":"reverse shell sequence: connect 10.0.0.1:4444 -> dup2 -> /bin/sh","enforced":true}
+{"timestamp":"2026-11-19T21:46:00Z","container_id":"minirun-1042","pid":2841,"tgid":2841,"ppid":2800,"comm":"python3","severity":"CRITICAL","event_type":"REVERSE_SHELL","details":"reverse shell sequence: connect 10.0.0.1:4444 -> dup2 onto fds {1, 0}","enforced":true}
 ```
 
 ### Performance & Host Syscall Overhead

@@ -57,7 +57,7 @@ sleep 2
 
 # 4. Guard Active Enforcement (Enforce Mode)
 step "4. Guard Active Enforcement (--guard enforce)..."
-echo "Simulating reverse shell sequence: connect -> dup2 -> exec(/bin/sh)..."
+echo "Simulating reverse shell sequence: connect -> dup2 onto stdio fds..."
 sudo "${MINIRUN}" run --guard enforce -- /bin/sh -c 'python3 -c "import socket, threading, time, os; t=threading.Thread(target=lambda: (lambda s: (s.bind((\"127.0.0.1\", 19876)), s.listen(1), s.accept()))(socket.socket(socket.AF_INET, socket.SOCK_STREAM))); t.daemon=True; t.start(); time.sleep(0.15); s=socket.socket(); s.connect((\"127.0.0.1\", 19876)); os.dup2(s.fileno(), 0); os.dup2(s.fileno(), 1); os.system(\"/bin/sh -c exit\")"' || echo -e "${RED}[ENFORCED] Container terminated with exit status 137 (SIGKILL)${NC}"
 
 echo -e "\n${BOLD}${GREEN}Demo Complete!${NC}\n"
